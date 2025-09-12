@@ -17,47 +17,6 @@ from pointblank._utils import (
 from pointblank.column import Column
 
 
-def _is_mssql_backend(nw_tbl) -> bool:
-    """
-    Detect if the table is using an MSSQL backend.
-    
-    Uses multiple detection methods to identify MSSQL:
-    1. Backend name detection via native namespace
-    2. SQL bracket notation detection (MSSQL-specific pattern)
-    
-    Parameters
-    ----------
-    nw_tbl
-        A Narwhals DataFrame or table
-        
-    Returns
-    -------
-    bool
-        True if MSSQL backend is detected, False otherwise
-    """
-    try:
-        # Method 1: Check native namespace for MSSQL indicators
-        native_namespace = nw.get_native_namespace(nw_tbl)
-        if hasattr(native_namespace, "__name__"):
-            if "mssql" in native_namespace.__name__.lower():
-                return True
-    except Exception:
-        pass
-    
-    try:
-        # Method 2: Check for MSSQL-specific SQL patterns
-        native_tbl = nw_tbl.to_native()
-        if hasattr(native_tbl, 'to_sql'):
-            sql_str = native_tbl.to_sql()
-            # Look for MSSQL-specific patterns: table names in brackets at start of FROM clause
-            if 'FROM [' in sql_str or 'JOIN [' in sql_str:
-                return True
-    except Exception:
-        pass
-    
-    return False
-
-
 def _safe_modify_datetime_compare_val(data_frame: Any, column: str, compare_val: Any) -> Any:
     """
     Safely modify datetime comparison values for LazyFrame compatibility.
@@ -1034,7 +993,9 @@ def _interrogate_comparison_base(
     """
     Unified base function for comparison operations (gt, ge, lt, le, eq, ne).
     
-    Automatically detects MSSQL backend and applies appropriate SQL compatibility fixes.
+    Uses universally compatible SQL patterns that work across all database engines
+    including MSSQL, PostgreSQL, SQLite, etc. by consistently using integer logic (0/1)
+    and explicit CASE WHEN statements.
 
     Parameters
     ----------
@@ -1057,10 +1018,6 @@ def _interrogate_comparison_base(
 
     compare_expr = _get_compare_expr_nw(compare=compare)
     nw_tbl = nw.from_native(tbl)
-    
-    # Detect MSSQL backend for compatibility adjustments
-    is_mssql = _is_mssql_backend(nw_tbl)
-    
     compare_expr = _safe_modify_datetime_compare_val(nw_tbl, column, compare_expr)
 
     # Create the comparison expression based on the operator
@@ -1082,64 +1039,38 @@ def _interrogate_comparison_base(
             f"Invalid operator: {operator}. Must be one of: 'gt', 'ge', 'lt', 'le', 'eq', 'ne'"
         )
 
-    # Create MSSQL-compatible boolean expressions
-    if is_mssql:
-        # For MSSQL, avoid problematic boolean patterns by using integer logic (0/1)
-        col_is_null = column_expr.is_null()
-        
-        result_tbl = nw_tbl.with_columns(
-            pb_is_good_1=col_is_null if na_pass else nw.lit(0),
-            pb_is_good_2=(
-                nw.col(compare.name).is_null() if (isinstance(compare, Column) and na_pass)
-                else nw.lit(0)
-            ),
-            # Use CASE WHEN with direct 1/0 values for MSSQL compatibility
-            pb_is_good_3=nw.when(col_is_null).then(nw.lit(0)).otherwise(
-                nw.when(comparison).then(nw.lit(1)).otherwise(nw.lit(0))
-            ),
-        )
-    else:
-        # Standard boolean logic for non-MSSQL backends
-        result_tbl = nw_tbl.with_columns(
-            pb_is_good_1=_safe_is_nan_or_null_expr(nw_tbl, nw.col(column), column) & na_pass,
-            pb_is_good_2=(
-                _safe_is_nan_or_null_expr(nw_tbl, nw.col(compare.name), compare.name) & na_pass
-                if isinstance(compare, Column)
-                else nw.lit(False)
-            ),
-            pb_is_good_3=comparison & ~_safe_is_nan_or_null_expr(nw_tbl, nw.col(column), column),
-        )
-    # Handle null values in pb_is_good_3 column with MSSQL compatibility
-    if is_mssql:
-        # For MSSQL, use integer values consistently
-        result_tbl = result_tbl.with_columns(
-            pb_is_good_3=(
-                nw.when(nw.col("pb_is_good_3").is_null())
-                .then(nw.lit(0))  # Use 0 instead of False for MSSQL
-                .otherwise(nw.col("pb_is_good_3"))
-            )
-        )
-    else:
-        result_tbl = result_tbl.with_columns(
-            pb_is_good_3=(
-                nw.when(nw.col("pb_is_good_3").is_null())
-                .then(nw.lit(False))
-                .otherwise(nw.col("pb_is_good_3"))
-            )
-        )
+    # Use universally compatible integer-based logic (0/1) instead of boolean logic
+    # This avoids problematic SQL patterns across different database engines
+    col_is_null = column_expr.is_null()
+    
+    result_tbl = nw_tbl.with_columns(
+        pb_is_good_1=nw.when(col_is_null).then(nw.lit(1 if na_pass else 0)).otherwise(nw.lit(0)),
+        pb_is_good_2=(
+            nw.when(nw.col(compare.name).is_null()).then(nw.lit(1 if na_pass else 0)).otherwise(nw.lit(0))
+            if isinstance(compare, Column)
+            else nw.lit(0)
+        ),
+        # Use explicit CASE WHEN instead of boolean operations for universal compatibility
+        pb_is_good_3=nw.when(col_is_null).then(nw.lit(0)).otherwise(
+            nw.when(comparison).then(nw.lit(1)).otherwise(nw.lit(0))
+        ),
+    )
 
-    # Combine the three boolean columns with MSSQL compatibility
-    if is_mssql:
-        # For MSSQL, combine integer columns (0/1) using addition
-        result_tbl = result_tbl.with_columns(
-            pb_is_good_=nw.when(
-                (nw.col("pb_is_good_1") + nw.col("pb_is_good_2") + nw.col("pb_is_good_3")) > 0
-            ).then(nw.lit(1)).otherwise(nw.lit(0))
-        ).drop("pb_is_good_1", "pb_is_good_2", "pb_is_good_3")
-    else:
-        result_tbl = result_tbl.with_columns(
-            pb_is_good_=nw.col("pb_is_good_1") | nw.col("pb_is_good_2") | nw.col("pb_is_good_3")
-        ).drop("pb_is_good_1", "pb_is_good_2", "pb_is_good_3")
+    # Handle potential null values in the comparison result
+    result_tbl = result_tbl.with_columns(
+        pb_is_good_3=(
+            nw.when(nw.col("pb_is_good_3").is_null())
+            .then(nw.lit(0))
+            .otherwise(nw.col("pb_is_good_3"))
+        )
+    )
+
+    # Combine using addition (more universally compatible than OR operations)
+    result_tbl = result_tbl.with_columns(
+        pb_is_good_=nw.when(
+            (nw.col("pb_is_good_1") + nw.col("pb_is_good_2") + nw.col("pb_is_good_3")) > 0
+        ).then(nw.lit(1)).otherwise(nw.lit(0))
+    ).drop("pb_is_good_1", "pb_is_good_2", "pb_is_good_3")
 
     return result_tbl.to_native()
 

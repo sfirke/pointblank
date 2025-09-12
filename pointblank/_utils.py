@@ -314,6 +314,8 @@ def _count_true_values_in_column(
 ) -> int:
     """
     Count the number of `True` values in a specified column of a table.
+    
+    Uses universal integer-based filtering (0/1) that works across all database engines.
 
     Parameters
     ----------
@@ -334,22 +336,14 @@ def _count_true_values_in_column(
     # already a Narwhals DataFrame)
     tbl_nw = nw.from_native(tbl)
 
-    # Detect MSSQL backend for compatibility adjustments
-    is_mssql = _is_mssql_backend(tbl_nw)
-
-    # Filter the table based on the column and whether we want to count True or False values
-    # For MSSQL, handle integer columns (0/1) differently than boolean columns
-    if is_mssql:
-        # For MSSQL, convert integer column (0/1) to boolean filter condition
-        if not inverse:
-            # Count where column = 1 (True equivalent)
-            tbl_filtered = tbl_nw.filter(nw.col(column) == 1)
-        else:
-            # Count where column = 0 (False equivalent) 
-            tbl_filtered = tbl_nw.filter(nw.col(column) == 0)
+    # Use universal integer-based filtering that works across all SQL engines
+    # This approach works for both boolean columns and integer (0/1) columns
+    if not inverse:
+        # Count where column = 1 (True equivalent)
+        tbl_filtered = tbl_nw.filter(nw.col(column) == 1)
     else:
-        # Standard boolean filtering for other databases
-        tbl_filtered = tbl_nw.filter(nw.col(column) if not inverse else ~nw.col(column))
+        # Count where column = 0 (False equivalent)
+        tbl_filtered = tbl_nw.filter(nw.col(column) == 0)
 
     # Always collect table if it is a LazyFrame; this is required to get the row count
     if _is_lazy_frame(tbl_filtered):
