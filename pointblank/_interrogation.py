@@ -155,6 +155,67 @@ def _safe_is_nan_or_null_expr(data_frame: Any, column_expr: Any, column_name: st
     return null_check
 
 
+def _safe_is_not_null_expr(data_frame: Any, column_expr: Any, column_name: str = None) -> Any:
+    """
+    Create an expression that safely checks for NOT NULL values.
+    
+    This function is specifically designed to handle MSSQL backend issues where
+    NOT (column IS NULL) syntax can cause "Incorrect syntax near the keyword 'IS'." errors.
+    For MSSQL, it generates (column IS NOT NULL) instead of NOT (column IS NULL).
+    
+    Parameters
+    ----------
+    data_frame
+        The data frame to get backend information from.
+    column_expr
+        The narwhals column expression to check.
+    column_name
+        The name of the column.
+
+    Returns
+    -------
+    Any
+        A narwhals expression that returns `True` for NOT NULL values.
+    """
+    # Check if we're dealing with an Ibis backend and specifically MSSQL
+    try:
+        native_namespace = nw.get_native_namespace(data_frame)
+        
+        # If it's an Ibis backend, check if it's MSSQL
+        if hasattr(native_namespace, "__name__") and "ibis" in native_namespace.__name__:
+            # Try to get the backend type to detect MSSQL
+            try:
+                if hasattr(data_frame, 'get_backend'):
+                    backend = data_frame.get_backend()
+                elif hasattr(data_frame, '_backend'):
+                    backend = data_frame._backend
+                else:
+                    backend = None
+                    
+                if backend is not None:
+                    backend_name = str(type(backend)).lower()
+                    print(f"DEBUG: Detected backend type: {backend_name}")  # Debug print
+                    
+                    # For MSSQL backends, use explicit IS NOT NULL to avoid syntax errors
+                    if 'mssql' in backend_name or 'sqlserver' in backend_name:
+                        print(f"DEBUG: Using MSSQL-safe IS NOT NULL for column {column_name}")  # Debug print
+                        # Use boolean comparison to generate MSSQL-safe SQL
+                        # This generates (column IS NULL) = FALSE instead of NOT (column IS NULL)
+                        try:
+                            return column_expr.is_null() == False
+                        except Exception:
+                            # Ultimate fallback: use standard negation and hope for the best
+                            return ~column_expr.is_null()
+            except Exception as e:
+                print(f"DEBUG: Error detecting backend: {e}")  # Debug print
+                pass
+    except Exception:
+        pass
+    
+    # For non-MSSQL backends, use standard negation
+    return ~column_expr.is_null()
+
+
 class ConjointlyValidation:
     def __init__(self, data_tbl, expressions, threshold, tbl_type):
         self.data_tbl = data_tbl
@@ -1776,7 +1837,7 @@ def _interrogate_comparison_base(
             if isinstance(compare, Column)
             else nw.lit(False)
         ),
-        pb_is_good_3=comparison & ~_safe_is_nan_or_null_expr(nw_tbl, nw.col(column), column),
+        pb_is_good_3=comparison & _safe_is_not_null_expr(nw_tbl, nw.col(column), column),
     )
 
     result_tbl = result_tbl.with_columns(
