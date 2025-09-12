@@ -194,11 +194,9 @@ def _safe_is_not_null_expr(data_frame: Any, column_expr: Any, column_name: str =
                     
                 if backend is not None:
                     backend_name = str(type(backend)).lower()
-                    print(f"DEBUG: Detected backend type: {backend_name}")  # Debug print
                     
                     # For MSSQL backends, use explicit IS NOT NULL to avoid syntax errors
                     if 'mssql' in backend_name or 'sqlserver' in backend_name:
-                        print(f"DEBUG: Using MSSQL-safe IS NOT NULL for column {column_name}")  # Debug print
                         # Use boolean comparison to generate MSSQL-safe SQL
                         # This generates (column IS NULL) = FALSE instead of NOT (column IS NULL)
                         try:
@@ -207,7 +205,6 @@ def _safe_is_not_null_expr(data_frame: Any, column_expr: Any, column_name: str =
                             # Ultimate fallback: use standard negation and hope for the best
                             return ~column_expr.is_null()
             except Exception as e:
-                print(f"DEBUG: Error detecting backend: {e}")  # Debug print
                 pass
     except Exception:
         pass
