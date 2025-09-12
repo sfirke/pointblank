@@ -266,6 +266,47 @@ def _check_column_exists(dfn: nw.DataFrame, column: str) -> None:
         raise ValueError(f"Column '{column}' not found in DataFrame.")
 
 
+def _is_mssql_backend(tbl_nw) -> bool:
+    """
+    Detect if the table is using an MSSQL backend.
+    
+    Uses multiple detection methods to identify MSSQL:
+    1. Backend name detection via native namespace
+    2. SQL bracket notation detection (MSSQL-specific pattern)
+    
+    Parameters
+    ----------
+    tbl_nw
+        A Narwhals DataFrame or table
+        
+    Returns
+    -------
+    bool
+        True if MSSQL backend is detected, False otherwise
+    """
+    try:
+        # Method 1: Check native namespace for MSSQL indicators
+        native_namespace = nw.get_native_namespace(tbl_nw)
+        if hasattr(native_namespace, "__name__"):
+            if "mssql" in native_namespace.__name__.lower():
+                return True
+    except Exception:
+        pass
+    
+    try:
+        # Method 2: Check for MSSQL-specific SQL patterns
+        native_tbl = tbl_nw.to_native()
+        if hasattr(native_tbl, 'to_sql'):
+            sql_str = native_tbl.to_sql()
+            # Look for MSSQL-specific patterns: table names in brackets at start of FROM clause
+            if 'FROM [' in sql_str or 'JOIN [' in sql_str:
+                return True
+    except Exception:
+        pass
+    
+    return False
+
+
 def _count_true_values_in_column(
     tbl: FrameT,
     column: str,
@@ -293,8 +334,22 @@ def _count_true_values_in_column(
     # already a Narwhals DataFrame)
     tbl_nw = nw.from_native(tbl)
 
+    # Detect MSSQL backend for compatibility adjustments
+    is_mssql = _is_mssql_backend(tbl_nw)
+
     # Filter the table based on the column and whether we want to count True or False values
-    tbl_filtered = tbl_nw.filter(nw.col(column) if not inverse else ~nw.col(column))
+    # For MSSQL, handle integer columns (0/1) differently than boolean columns
+    if is_mssql:
+        # For MSSQL, convert integer column (0/1) to boolean filter condition
+        if not inverse:
+            # Count where column = 1 (True equivalent)
+            tbl_filtered = tbl_nw.filter(nw.col(column) == 1)
+        else:
+            # Count where column = 0 (False equivalent) 
+            tbl_filtered = tbl_nw.filter(nw.col(column) == 0)
+    else:
+        # Standard boolean filtering for other databases
+        tbl_filtered = tbl_nw.filter(nw.col(column) if not inverse else ~nw.col(column))
 
     # Always collect table if it is a LazyFrame; this is required to get the row count
     if _is_lazy_frame(tbl_filtered):
