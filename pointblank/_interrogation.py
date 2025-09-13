@@ -859,7 +859,8 @@ def interrogate_eq(tbl: FrameT, column: str, compare: any, na_pass: bool) -> Fra
         )
 
         result_tbl = result_tbl.with_columns(
-            pb_is_good_3=(~nw.col(compare.name).is_null() & ~nw.col(column).is_null())
+            pb_is_good_3=(_safe_is_not_null_expr(nw_tbl, nw.col(compare.name), compare.name) 
+                         & _safe_is_not_null_expr(nw_tbl, nw.col(column), column))
         )
 
         if is_pandas_dataframe(result_tbl.to_native()):
@@ -880,7 +881,8 @@ def interrogate_eq(tbl: FrameT, column: str, compare: any, na_pass: bool) -> Fra
                             # Both not Null and values are equal: use string conversion
                             # as a fallback
                             (
-                                (~nw.col(column).is_null() & ~nw.col(compare.name).is_null())
+                                (_safe_is_not_null_expr(nw_tbl, nw.col(column), column) 
+                                 & _safe_is_not_null_expr(nw_tbl, nw.col(compare.name), compare.name))
                                 & (
                                     nw.col(column).cast(nw.String)
                                     == nw.col(compare.name).cast(nw.String)
@@ -1774,7 +1776,7 @@ def interrogate_not_null(tbl: FrameT, column: str) -> FrameT:
     """Not null interrogation."""
 
     nw_tbl = nw.from_native(tbl)
-    result_tbl = nw_tbl.with_columns(pb_is_good_=~nw.col(column).is_null())
+    result_tbl = nw_tbl.with_columns(pb_is_good_=_safe_is_not_null_expr(nw_tbl, nw.col(column), column))
     return result_tbl.to_native()
 
 
@@ -1901,7 +1903,7 @@ def interrogate_rows_complete(tbl: FrameT, columns_subset: list[str] | None) -> 
 
     # Failing rows will have the value `True` in the generated column, so we need to negate
     # the result to get the passing rows
-    result_tbl = result_tbl.with_columns(pb_is_good_=~nw.col("_any_is_null_"))
+    result_tbl = result_tbl.with_columns(pb_is_good_=_safe_is_not_null_expr(nw_tbl, nw.col("_any_is_null_"), "_any_is_null_"))
     result_tbl = result_tbl.drop("_any_is_null_")
 
     return result_tbl.to_native()
